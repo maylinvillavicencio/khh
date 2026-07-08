@@ -5,85 +5,230 @@ import matplotlib.pyplot as plt
 import joblib
 import os
 
-# Configuración de la página web
+# =============================================================================
+# CONFIGURACION DE LA PAGINA
+# =============================================================================
 st.set_page_config(page_title="BioAI - Ablación Tumoral", layout="wide")
 
-st.title("🔬 Plataforma Predictiva de Biotransporte: Daño Tisular mediante IA")
+st.title("🔬 Plataforma Predictiva de Biotransporte: Ablación Tumoral mediante IA")
 st.markdown("""
-Esta aplicación web interactiva funciona como un **Modelo Subrogado de Inteligencia Artificial**. 
-Utiliza un regresor entrenado con las soluciones numéricas de la ecuación de Bioheat extraídas de COMSOL Multiphysics.
+Esta aplicación web interactiva funciona como un **Modelo Subrogado de Inteligencia Artificial**.
+Utiliza regresores entrenados con las soluciones numéricas del modelo COMSOL Multiphysics
+(ecuación de biocalor de Pennes + cinética de daño de Arrhenius) para predecir, en tiempo real,
+lo que antes solo se podía obtener corriendo una simulación de elementos finitos.
 """)
 
-# --- CARGA DEL MODELO PRE-ENTRENADO (.PKL) ---
-# Usamos un validador para avisar si el archivo .pkl se subió correctamente
-if os.path.exists('best_model.pkl') and os.path.getsize('best_model.pkl') > 0:
+# =============================================================================
+# CARGA DE LOS MODELOS PRE-ENTRENADOS (.PKL)
+# =============================================================================
+if os.path.exists("best_model.pkl") and os.path.getsize("best_model.pkl") > 0:
     try:
-        modelo_ia = joblib.load('best_model.pkl')
+        modelos = joblib.load("best_model.pkl")
+        modelo_dano = modelos["dano"]
+        modelo_temp = modelos["temp"]
     except Exception as e:
-        st.error(f"Error al decodificar el archivo del modelo: {e}. Por favor, vuelve a generar y subir 'best_model.pkl'.")
+        st.error(f"Error al decodificar 'best_model.pkl': {e}. Vuelve a correr training.py.")
         st.stop()
 else:
-    st.error("⚠️ No se encontró el archivo 'best_model.pkl' o el archivo está vacío (0 bytes). Asegúrate de haber ejecutado 'training.py' localmente y haber subido el archivo resultante a GitHub.")
+    st.error("⚠️ No se encontró 'best_model.pkl'. Ejecuta primero `python training.py` "
+              "(debe estar en la misma carpeta que fracionamiento_de_daño.txt y vasoo.txt).")
     st.stop()
 
-# --- DATOS HISTÓRICOS COMSOL PARA GRAFICAR ---
-tiempos = np.array([0, 0.01, 0.02, 0.04, 0.08, 0.12, 0.2, 0.28, 0.44, 0.6, 0.92, 1.24, 1.88, 2.52, 3.52, 4.52, 5.52, 6.52, 7.52, 8.52, 9.52, 10.52])
-dano_4mm = np.array([3.52e-7, 1.78e-4, 3.57e-4, 7.18e-4, 0.0014, 0.0022, 0.0038, 0.0056, 0.0096, 0.0141, 0.0256, 0.0400, 0.0799, 0.1311, 0.2318, 0.3418, 0.4497, 0.5479, 0.6329, 0.7041, 0.7626, 0.8101])
-dano_12mm = np.array([3.52e-7, 1.77e-4, 3.56e-4, 7.15e-4, 0.0014, 0.0022, 0.0037, 0.0054, 0.0091, 0.0133, 0.0241, 0.0377, 0.0770, 0.1284, 0.2299, 0.3395, 0.4457, 0.5416, 0.6245, 0.6942, 0.7519, 0.7992])
-dano_20mm = np.array([3.52e-7, 1.77e-4, 3.55e-4, 7.11e-4, 0.0014, 0.0021, 0.0036, 0.0052, 0.0086, 0.0123, 0.0211, 0.0313, 0.0574, 0.0884, 0.1449, 0.2049, 0.2650, 0.3232, 0.3783, 0.4298, 0.4775, 0.5216])
+# =============================================================================
+# DATOS HISTORICOS DE COMSOL (para graficar los puntos reales sobre las
+# curvas predichas). Se leen de los CSV generados por training.py a partir
+# de los .txt originales -- ya no hay ningun valor transcrito a mano aqui.
+# =============================================================================
+df_dano = pd.read_csv("tumor_data.csv")
+df_temp = pd.read_csv("vessel_data.csv")
 
-# --- INTERFAZ DE USUARIO EN VIVO (SIDEBAR) ---
-st.sidebar.header("🕹️ Parámetros de Predicción en Vivo")
-st.sidebar.markdown("Modifica las condiciones físicas para evaluar la respuesta de la IA de forma instantánea.")
+radios_comsol = sorted(df_dano["Distancia_mm"].unique())
+diametros_comsol = sorted(df_temp["Diametro_mm"].unique())
 
-tiempo_input = st.sidebar.slider("Tiempo de tratamiento (minutos):", 0.0, 10.52, 5.0, step=0.1)
-distancia_input = st.sidebar.slider("Distancia analizada desde el electrodo (mm):", 4.0, 20.0, 8.0, step=0.5)
+tab1, tab2, tab3 = st.tabs([
+    "🔥 Daño Tisular (Arrhenius)",
+    "🩸 Efecto Heat-Sink (Diámetro Vascular)",
+    "⚡ Sensibilidad a la Potencia (extensión teórica)",
+])
 
-# Predicción puntual en vivo usando el modelo cargado
-prediccion_viva = modelo_ia.predict([[tiempo_input, distancia_input]])[0]
-prediccion_viva = np.clip(prediccion_viva, 0.0, 1.0) # Restricción de límites físicos
+# =============================================================================
+# PESTAÑA 1 — DAÑO TISULAR (modelo original, mejorado)
+# =============================================================================
+with tab1:
+    st.sidebar.header("🕹️ Parámetros — Daño Tisular")
+    tiempo_input = st.sidebar.slider("Tiempo de tratamiento (min):", 0.0, 10.52, 5.0, step=0.1,
+                                       key="t_dano")
+    distancia_input = st.sidebar.slider("Distancia al electrodo (mm):", 4.0, 20.0, 8.0, step=0.5,
+                                          key="r_dano")
 
-# Mostrar resultados numéricos destacados
-col1, col2 = st.columns(2)
-with col1:
-    st.metric(label="📍 Fracción de Daño Tisular Predicho", value=f"{prediccion_viva:.4f} ({prediccion_viva*100:.2f}%)")
-with col2:
-    status = "🔴 Necrosis Crítica (>70%)" if prediccion_viva >= 0.7 else "🟡 Lesión Parcial / Tejido Viable"
-    st.metric(label="⚠️ Estado Celular Estimado", value=status)
+    pred_viva = float(np.clip(modelo_dano.predict([[tiempo_input, distancia_input]])[0], 0.0, 1.0))
 
-# --- GENERACIÓN DE GRÁFICAS DE ANÁLISIS AVANZADO ---
-st.subheader("📊 Análisis Gráfico de Curvas de Daño Continuas")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("📍 Fracción de Daño Tisular Predicho", f"{pred_viva:.4f} ({pred_viva*100:.2f}%)")
+    with col2:
+        status = "🔴 Necrosis Crítica (>70%)" if pred_viva >= 0.7 else "🟡 Lesión Parcial / Tejido Viable"
+        st.metric("⚠️ Estado Celular Estimado", status)
 
-tiempos_continuos = np.linspace(0, 10.52, 200)
+    st.subheader("📊 Curvas de Daño (COMSOL vs. predicción IA)")
+    t_cont = np.linspace(0, 10.52, 200)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    colores = {radios_comsol[0]: "blue", radios_comsol[1]: "orange", radios_comsol[2]: "green"}
+    for r in radios_comsol:
+        sub = df_dano[df_dano["Distancia_mm"] == r]
+        ax.scatter(sub["Tiempo_min"], sub["Fraccion_Dano"], color=colores[r], alpha=0.6,
+                    label=f"COMSOL histórico ({r:.0f} mm)")
+    Xc = np.column_stack((t_cont, np.full_like(t_cont, distancia_input)))
+    pred_c = np.clip(modelo_dano.predict(Xc), 0.0, 1.0)
+    ax.plot(t_cont, pred_c, "r--", linewidth=2.5, label=f"Predicción IA continua ({distancia_input} mm)")
+    ax.plot(tiempo_input, pred_viva, "kX", markersize=12, label="Punto en vivo seleccionado")
+    ax.set_title("Evolución del Daño Tisular: Simulación Física vs. Regresión de IA")
+    ax.set_xlabel("Tiempo de exposición (min)"); ax.set_ylabel("Fracción de daño celular (0 a 1)")
+    ax.grid(True, linestyle=":", alpha=0.6); ax.legend(loc="upper left")
+    st.pyplot(fig)
 
-fig, ax = plt.subplots(figsize=(10, 5))
+    with st.expander("⚠️ Limitación importante del modelo (léase antes de interpretar clínicamente)"):
+        st.markdown("""
+        El modelo se entrenó con **solo 3 radios simulados en COMSOL** (4, 12 y 20 mm). Entre
+        r=4 mm y r=12 mm, el daño real de COMSOL es casi plano (0.810 → 0.799, apenas 1% de
+        diferencia), pero entre r=12 mm y r=20 mm cae fuerte (0.799 → 0.522). Cualquier modelo
+        suave (este polinomio, pero también un Gaussian Process — se probó ambos) que intente
+        conectar "casi plano, luego caída brusca" genera un pequeño sobre-pico artificial
+        alrededor de r≈8 mm (~3-4% por encima del valor real en r=4mm). **Esto es una limitación
+        de tener solo 3 sondas espaciales en la simulación, no un error del algoritmo.** Para
+        eliminarlo haría falta correr COMSOL con más sondas radiales (p.ej. cada 2 mm).
+        """)
 
-# Graficar datos experimentales/COMSOL históricos
-ax.scatter(tiempos, dano_4mm, color='blue', alpha=0.6, label='COMSOL Histórico (4 mm)')
-ax.scatter(tiempos, dano_12mm, color='orange', alpha=0.6, label='COMSOL Histórico (12 mm)')
-ax.scatter(tiempos, dano_20mm, color='green', alpha=0.6, label='COMSOL Histórico (20 mm)')
+# =============================================================================
+# PESTAÑA 2 — EFECTO HEAT-SINK (nueva, usando vasoo.txt)
+# =============================================================================
+with tab2:
+    st.markdown("""
+    Este modelo predice la **temperatura en la pared del vaso sanguíneo** en función de su
+    diámetro y del tiempo de ablación, usando los datos del barrido paramétrico de COMSOL
+    (D_vaso = 1, 3, 5 mm). A diferencia del modelo de daño, aquí se usa **Gaussian Process
+    Regression** en vez de un polinomio — se probó con polinomios de grado 2, 3 y 4 y todos
+    fallaron (ver nota abajo), porque esta curva tiene forma de "transitorio + meseta", no
+    polinomial.
+    """)
 
-# Predicciones dinámicas continuas de la IA
-X_dinamico = np.column_stack((tiempos_continuos, np.full_like(tiempos_continuos, distancia_input)))
-pred_dinamica = np.clip(modelo_ia.predict(X_dinamico), 0.0, 1.0)
+    st.sidebar.header("🕹️ Parámetros — Efecto Heat-Sink")
+    tiempo_input2 = st.sidebar.slider("Tiempo de tratamiento (min):", 0.0, 10.0, 5.0, step=0.1,
+                                        key="t_temp")
+    diametro_input = st.sidebar.slider("Diámetro del vaso (mm):", 1.0, 5.0, 2.0, step=0.5,
+                                         key="d_temp")
 
-ax.plot(tiempos_continuos, pred_dinamica, color='red', linestyle='--', linewidth=2.5,
-        label=f'Predicción IA Continua (Ajustada a {distancia_input} mm)')
+    pred_temp_viva = float(modelo_temp.predict([[tiempo_input2, diametro_input]])[0])
 
-# Corrección en la sintaxis de graficación del punto seleccionado (parámetros limpios para evitar errores de Matplotlib)
-ax.plot(tiempo_input, prediccion_viva, marker='X', color='black', markersize=12, label='Punto en Vivo Seleccionado')
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("🌡️ Temperatura Predicha en Pared Vascular", f"{pred_temp_viva:.2f} °C")
+    with col2:
+        alerta = "🔴 Riesgo de vaporización (>100°C)" if pred_temp_viva >= 100 else \
+                 "🟢 Rango de coagulación/necrosis (50-100°C)" if pred_temp_viva >= 50 else \
+                 "🟡 Aún no alcanza umbral de necrosis (<50°C)"
+        st.metric("Estado térmico estimado", alerta)
 
-ax.set_title('Evolución del Daño Tisular: Simulación Física vs. Regresión Matemática de IA', fontsize=12)
-ax.set_xlabel('Tiempo de Exposición (min)', fontsize=10)
-ax.set_ylabel('Fracción de Daño Celular (0 a 1)', fontsize=10)
-ax.grid(True, linestyle=':', alpha=0.6)
-ax.legend(loc='upper left')
+    st.subheader("📊 Curvas de Temperatura vs. Diámetro Vascular (efecto heat-sink)")
+    t_cont2 = np.linspace(0, 10, 200)
+    fig2, ax2 = plt.subplots(figsize=(10, 5))
+    colores_d = {diametros_comsol[0]: "blue", diametros_comsol[1]: "green", diametros_comsol[2]: "red"}
+    for d in diametros_comsol:
+        sub = df_temp[df_temp["Diametro_mm"] == d]
+        ax2.scatter(sub["Tiempo_min"], sub["Temperatura_C"], color=colores_d[d], s=60,
+                     label=f"COMSOL histórico (D={d:.0f} mm)", zorder=5)
+    Xc2 = np.column_stack((t_cont2, np.full_like(t_cont2, diametro_input)))
+    pred_c2 = modelo_temp.predict(Xc2)
+    ax2.plot(t_cont2, pred_c2, "m--", linewidth=2.5, label=f"Predicción IA continua (D={diametro_input} mm)")
+    ax2.plot(tiempo_input2, pred_temp_viva, "kX", markersize=12, label="Punto en vivo seleccionado")
+    ax2.set_title("Temperatura en la pared vascular: datos COMSOL vs. predicción IA")
+    ax2.set_xlabel("Tiempo (min)"); ax2.set_ylabel("Temperatura (°C)")
+    ax2.grid(True, linestyle=":", alpha=0.6); ax2.legend(loc="lower right")
+    st.pyplot(fig2)
 
-# Renderizar gráfico en el dashboard web de forma segura
-st.pyplot(fig)
+    with st.expander("🔎 Hallazgo interesante: el diámetro casi no importa a 22V"):
+        st.markdown("""
+        Al entrenar el modelo, el kernel del Gaussian Process asignó una longitud de escala
+        **extremadamente grande** a la variable diámetro — es decir, el modelo "aprendió" que a
+        V₀=22V la temperatura final en la pared vascular es prácticamente la misma para D=1, 3 o
+        5 mm (todas convergen a ~103°C). Esto confirma cuantitativamente, con una herramienta de
+        IA independiente, la conclusión que el grupo ya había observado con las curvas
+        superpuestas: a este voltaje, la generación de calor por efecto Joule domina tan
+        fuertemente sobre la disipación convectiva del vaso, que el tamaño del vaso deja de ser
+        el factor limitante.
+        """)
+        st.markdown("""
+        **Por qué NO se usó un polinomio aquí:** se probaron polinomios de grado 2 (subajusta la
+        meseta en ~5°C), grado 3 (oscila de forma irreal entre puntos: sube a 107°C, baja a
+        100°C, vuelve a subir) y grado 4 -- ajuste exacto con 15 parámetros para 15 datos --
+        (sobreajuste severo tipo Runge: llega a predecir una *caída* de temperatura con el
+        tiempo, físicamente imposible). El Gaussian Process Regression, en cambio, dio un
+        RMSE de validación cruzada de ~0.16-0.35°C sin ninguna oscilación.
+        """)
+
+# =============================================================================
+# PESTAÑA 3 — SENSIBILIDAD A LA POTENCIA (extensión analítica, NO ENTRENADA)
+# =============================================================================
+with tab3:
+    st.warning("""
+    **Esta pestaña NO es un modelo de IA entrenado.** Los tres archivos de datos disponibles
+    (fracionamiento_de_daño.txt, vasoo.txt, parametros.txt) corresponden **únicamente** a
+    V0 = 22 V — no existe en el proyecto un barrido paramétrico de voltaje. Para entrenar un
+    modelo real de "IA vs. potencia" haría falta correr COMSOL con más voltajes (p.ej. 15, 22,
+    30 V) y aplicar el mismo enfoque de Gaussian Process usado arriba.
+
+    Lo que sigue es una **extensión analítica** (no aprendida de datos) basada directamente en
+    las ecuaciones del propio proyecto, mostrada aquí como una idea de análisis adicional, no
+    como resultado predictivo validado.
+    """)
+
+    st.markdown(r"""
+    ### Justificación física
+    El modelo del grupo define la generación de calor por efecto Joule como:
+
+    $$Q_{RF} = \sigma |\nabla V|^2$$
+
+    y la ecuación de biocalor de Pennes que resuelve COMSOL es **lineal** en el término fuente
+    $Q_{RF}$ (conducción + perfusión, ambos términos lineales en T). Para una geometría y
+    conductividad fijas, esto implica que, en estado estacionario (meseta térmica), el
+    incremento de temperatura sobre la basal escala aproximadamente con el cuadrado del
+    voltaje aplicado:
+
+    $$\Delta T_{meseta}(V_0) \approx \Delta T_{meseta}(22\text{V}) \cdot \left(\frac{V_0}{22}\right)^2$$
+
+    Usando el valor de meseta medido en COMSOL a 22V (~103°C, es decir ΔT≈66°C sobre 37°C
+    basal), se puede *estimar* (no simular) la meseta térmica para otros voltajes:
+    """)
+
+    V0_ref = 22.0
+    T_base = 37.0
+    dT_ref = float(df_temp[df_temp["Tiempo_min"] == df_temp["Tiempo_min"].max()]["Temperatura_C"].mean()) - T_base
+
+    V_grid = np.linspace(10, 35, 100)
+    T_est = T_base + dT_ref * (V_grid / V0_ref) ** 2
+
+    fig3, ax3 = plt.subplots(figsize=(9, 5))
+    ax3.plot(V_grid, T_est, color="darkred", linewidth=2.5,
+              label="Estimación teórica ΔT ∝ V² (no simulada)")
+    ax3.scatter([V0_ref], [T_base + dT_ref], color="black", zorder=5, s=80,
+                 label=f"Único dato real disponible (V₀={V0_ref:.0f}V, COMSOL)")
+    ax3.axhline(100, color="gray", linestyle=":", label="Umbral de vaporización (100°C)")
+    ax3.set_xlabel("Voltaje aplicado V₀ (V)"); ax3.set_ylabel("Temperatura de meseta estimada (°C)")
+    ax3.set_title("Sensibilidad teórica de la meseta térmica al voltaje (Q_RF ∝ V²)")
+    ax3.legend(); ax3.grid(alpha=0.3)
+    st.pyplot(fig3)
+
+    V_input = st.slider("Voltaje a evaluar (V):", 10.0, 35.0, 22.0, step=0.5)
+    T_pred_teorica = T_base + dT_ref * (V_input / V0_ref) ** 2
+    st.metric("Meseta térmica estimada (extrapolación teórica)", f"{T_pred_teorica:.1f} °C")
+    st.caption("Esta estimación asume que la respuesta térmica del tejido es lineal frente a la "
+                "potencia inyectada (válido dentro de las hipótesis del modelo de Pennes con "
+                "propiedades constantes). No reemplaza una simulación COMSOL real a otros voltajes.")
 
 st.markdown("""
 ---
 ### 🛠️ Diagrama de Flujo del Proceso
-`COMSOL Multiphysics (Datos Numéricos)` ➡️ `Extracción de Sondas de Dominio` ➡️ `Pipeline Polinomial en Python` ➡️ `Despliegue en Streamlit Web App`
+`COMSOL Multiphysics (Datos Numéricos)` ➡️ `Lectura directa de los .txt exportados` ➡️
+`Entrenamiento de 2 modelos (polinomial para daño, GPR para heat-sink)` ➡️
+`Despliegue en Streamlit Web App`
 """)
