@@ -1,54 +1,53 @@
 # Monitoreo Predictivo de Ablación Tumoral mediante IA
-### v2 — Grupo 2, Biotransporte (RFA hepática)
 
-App de Streamlit que funciona como **modelo subrogado** de la simulación COMSOL Multiphysics
-del proyecto (ecuación de biocalor de Pennes + cinética de daño de Arrhenius), para predecir
-en tiempo real lo que antes solo se podía obtener corriendo la simulación de elementos finitos.
+App de Streamlit para el análisis de biotransporte térmico en bioingeniería. Combina un **modelo
+subrogado de IA** con **detección de patrones** para analizar simulaciones de ablación por
+radiofrecuencia (RF) obtenidas en COMSOL Multiphysics.
 
-## 🆕 Cambios respecto a la versión original
+### 🎯 Oportunidades de IA implementadas
 
-1. **Lectura directa de los `.txt` exportados de COMSOL** (`fracionamiento_de_daño.txt`,
-   `vasoo.txt`). Ya no hay ningún valor transcrito a mano en `training.py`; si se vuelve a
-   correr COMSOL y se reemplazan los `.txt`, basta con volver a correr `training.py`.
+1. **Predicción del modelado**: modelo subrogado (regresión polinomial grado 3) entrenado con 66
+   puntos reales de COMSOL, que predice la fracción de daño tisular para cualquier combinación
+   tiempo–distancia sin volver a simular.
+2. **Detección de patrones**: cuantifica el efecto *heat-sink* del vaso sanguíneo comparando la
+   velocidad de daño (dD/dt) por distancia al electrodo y la meseta térmica de enfriamiento
+   convectivo cerca del vaso.
+3. **Optimización con IA (propuesta a futuro)**: algoritmo genético para hallar el par
+   (voltaje V0, tiempo de ablación) que maximice el daño tumoral sin exceder una temperatura
+   segura en el vaso.
 
-2. **Segundo modelo agregado — Efecto Heat-Sink**: predice la temperatura en la pared vascular
-   en función del diámetro del vaso (1-5 mm) y el tiempo, usando `vasoo.txt` (antes la app solo
-   tenía el modelo de daño tisular).
+### 🚀 Características de la App
 
-3. **Elección de algoritmo justificada por curva, no por costumbre**:
-   - *Daño tisular (r, t) → Ω*: se mantiene el pipeline polinomial grado 3 original — la curva
-     de Arrhenius es suave y monótona, y el polinomio la ajusta bien (RMSE ≈ 0.009).
-   - *Heat-sink (D, t) → T*: se reemplazó el polinomio por **Gaussian Process Regression**. Se
-     probaron polinomios de grado 2 (subajusta la meseta en ~5°C), grado 3 (oscila de forma
-     irreal entre puntos) y grado 4 (sobreajuste severo tipo Runge, predice hasta una caída de
-     temperatura con el tiempo). El GPR da RMSE ≈ 0.12-0.35°C sin oscilaciones.
+* **Estimación en vivo**: calcula la fracción de daño tisular (0 a 1) según tiempo y distancia
+  al electrodo.
+* **Modelado continuo**: interpola curvas suaves mediante regresión polinomial multivariable.
+* **Análisis clínico**: identifica si las coordenadas ingresadas están en necrosis crítica o
+  tejido viable.
+* **Detección de patrones**: gráficas de velocidad de daño (dD/dt) y comparación por distancia.
+* **Efecto heat-sink**: visualiza la meseta térmica cerca del vaso sanguíneo (`data/vasoo.txt`).
 
-4. **Limitación documentada explícitamente en la app**: con solo 3 radios simulados (4, 12,
-   20 mm), cualquier modelo suave genera un pequeño sobre-pico artificial (~3-4%) alrededor de
-   r≈8mm, porque el daño real es casi plano entre 4-12mm y cae fuerte después. Esto se explica
-   en un expander dentro de la app en vez de ocultarse.
+### 📁 Estructura del proyecto
 
-5. **Nueva pestaña de sensibilidad a la potencia**, claramente marcada como **extensión
-   analítica y NO como modelo de IA entrenado** (los datos disponibles son solo a V0=22V). Se
-   deriva de la propia ecuación de Joule del proyecto (Q_RF = σ|∇V|², sistema lineal en la
-   fuente) para estimar cómo escalaría la meseta térmica con el voltaje, dejando explícito que
-   no reemplaza una simulación real.
+```
+├── app.py                          # App de Streamlit (predicción + patrones + heat-sink)
+├── training.py                     # Entrena el modelo subrogado
+├── best_model.pkl                  # Modelo entrenado (regresión polinomial grado 3)
+├── tumor_data.csv                  # Datos de entrenamiento exportados (66 puntos)
+├── requirements.txt                # Dependencias
+└── data/                           # Datos crudos de COMSOL (trazabilidad)
+    ├── fracionamiento_de_daño.txt
+    ├── vasoo.txt
+    └── parametros.txt
+```
 
-## 🚀 Características de la App
-
-* **Pestaña 1 — Daño Tisular:** estimación en vivo de la fracción de daño (0 a 1) según tiempo
-  y distancia al electrodo, con nota de limitación de datos.
-* **Pestaña 2 — Efecto Heat-Sink:** temperatura predicha en la pared vascular según diámetro
-  del vaso y tiempo, con hallazgo de que el diámetro casi no influye a 22V.
-* **Pestaña 3 — Sensibilidad a la Potencia:** extensión teórica (no entrenada) de cómo
-  escalaría la meseta térmica con el voltaje, basada en la física del propio modelo.
-
-## 🛠️ Arranque rápido
+### 🛠️ Arranque rápido
 
 1. Instalar dependencias: `pip install -r requirements.txt`
-2. Correr el entrenamiento (regenera `best_model.pkl`, `tumor_data.csv`, `vessel_data.csv`
-   directamente desde los `.txt`): `python training.py`
+2. Correr el entrenamiento (opcional, ya incluye `best_model.pkl` generado): `python training.py`
 3. Lanzar la aplicación web: `streamlit run app.py`
 
-**Archivos necesarios en la misma carpeta:** `fracionamiento_de_daño.txt`, `vasoo.txt`
-(exportados de COMSOL), además de los `.py` de este repositorio.
+### ⚠️ Limitaciones
+
+* Dataset pequeño (66 puntos); riesgo de extrapolación fuera de 4–20 mm o >10.52 min.
+* No incluye datos clínicos/experimentales reales — es un sustituto de la simulación numérica,
+  no del paciente.
